@@ -84,9 +84,8 @@ jobs:
       - name: Extract the three DMGs
         run: |
           mkdir -p ipsw
-          unzip -o ipsw.zip \
-            "Firmware/$OS_DMG" "Firmware/$SYS_DMG" "Firmware/$APP_DMG" -d ipsw
-          ls -l ipsw/Firmware/
+          unzip -o ipsw.zip "$OS_DMG" "$SYS_DMG" "$APP_DMG" -d ipsw
+          ls -l ipsw/
           rm -f ipsw.zip
           df -h / | tail -1
 
@@ -94,7 +93,7 @@ jobs:
         run: |
           # mkiosroot.sh mounts through apfs-fuse and rsyncs as root
           sudo -E bash tools/mkiosroot.sh \
-            "ipsw/Firmware/$OS_DMG" "ipsw/Firmware/$SYS_DMG" "ipsw/Firmware/$APP_DMG" \
+            "ipsw/$OS_DMG" "ipsw/$SYS_DMG" "ipsw/$APP_DMG" \
             out.img "$IMG_SIZE"
           ls -lh out.img
 
