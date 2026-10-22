@@ -1,0 +1,92 @@
+name: build-shim
+
+# Replicates the upstream (mytiantian001/iPadOS-nabu) boot path for nabu:
+#   ADT (tools/mkadt.py)  ->  payload (tools/mkpayload.py)
+#   -> bare-metal shim (shim/build.sh, aarch64-linux-gnu-gcc)
+#   -> Android boot image v2 via AOSP mkbootimg.py
+#
+# Unlike the Mu-Silicium UEFI + DarwinBoot route, the shim owns the MMU,
+# the stack and the exception vectors, and loads the kernel at
+# PHYS_BASE = 0xb0000000 exactly as the ADT describes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      cmdline:
+        description: kernel command line baked into the payload
+        default: "debug=0xc serial=3 cpus=1 keepsyms=1"
+  push:
+    branches: [main]
+
+concurrency:
+  group: shim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu cpio
+          aarch64-linux-gnu-gcc --version | head -1
+          # shim/build.sh calls `mkbootimg`; put the AOSP python script behind
+          # that name so the upstream script stays untouched.
+          printf '#!/bin/sh\nexec python3 %s/mkbootimg.py "$@"\n' "$PWD" | sudo tee /usr/local/bin/mkbootimg >/dev/null
+          sudo chmod +x /usr/local/bin/mkbootimg
+          mkbootimg --help 2>&1 | head -3 || true
+
+      - name: ADT
+        run: |
+          mkdir -p shim/out
+          python3 tools/mkadt.py shim/out/nabu.adt --highmem
+          ls -l shim/out/nabu.adt
+
+      - name: Payload
+        env:
+          CMDLINE: ${{ inputs.cmdline || 'debug=0xc serial=3 cpus=1 keepsyms=1' }}
+        run: |
+          python3 tools/mkpayload.py \
+            kernel/kernel.development.nabu shim/out/nabu.adt shim/out/payload.bin \
+            --cmdline "$CMDLINE"
+          ls -l shim/out/payload.bin
+
+      - name: Shim + boot image
+        run: |
+          bash shim/build.sh "$PWD/shim/out/payload.bin" 2>&1 | tail -40
+          echo "=== out ==="
+          ls -l shim/out/
+
+      - name: Verify boot image
+        run: |
+          python3 - <<'PY'
+          import struct, os
+          p = "shim/out/shim-boot.img"
+          d = open(p, "rb").read()
+          print(f"{p}: {os.path.getsize(p):,} bytes")
+          assert d[:8] == b"ANDROID!", "bad magic"
+          ks, ka, rs, ra, ss, sa, ts, ta, ps, hv = struct.unpack("<10I", d[8:48])
+          print(f"  header_version={hv} page_size={ps}")
+          print(f"  kernel  size={ks:,} addr={ka:#x}")
+          print(f"  ramdisk size={rs:,} addr={ra:#x}")
+          if hv >= 2:
+              dtb_size, dtb_addr = struct.unpack("<QQ", d[1632:1648])
+              print(f"  dtb     size={dtb_size:,} addr={dtb_addr:#x}")
+          cmdline = d[64:64+512].split(b"\0")[0].decode()
+          print(f"  cmdline={cmdline!r}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shim-boot
+          path: |
+            shim/out/shim-boot.img
+            shim/out/Image
+            shim/out/payload.bin
+            shim/out/nabu.adt
+          if-no-files-found: warn
