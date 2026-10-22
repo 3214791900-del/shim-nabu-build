@@ -54,8 +54,8 @@ jobs:
             sudo cmake --install /tmp/apfs-fuse/build
           fi
           command -v apfs-fuse
-          apfs-fuse --help 2>&1 | head -3 || true
-          mkfs.hfsplus -V
+          apfs-fuse 2>&1 | head -3 || true
+          command -v mkfs.hfsplus
           command -v img2simg || echo "img2simg missing (sparse step will be skipped)"
           ls -l /dev/fuse
           df -h / | tail -1
