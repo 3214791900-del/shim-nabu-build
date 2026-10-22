@@ -42,11 +42,22 @@ jobs:
       - name: Deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq apfs-fuse hfsprogs rsync unzip curl \
+          sudo apt-get install -y -qq hfsprogs rsync unzip curl cmake g++ \
+                                      libfuse3-dev libbz2-dev zlib1g-dev libssl-dev \
                                       android-sdk-libsparse-utils
-          apfs-fuse 2>&1 | head -2 || true
-          mkfs.hfsplus -V || true
+          # Ubuntu has no apfs-fuse package, so build it from source.
+          if ! command -v apfs-fuse >/dev/null 2>&1; then
+            git clone -q --depth 1 --recurse-submodules --shallow-submodules \
+              https://github.com/sgan81/apfs-fuse.git /tmp/apfs-fuse
+            cmake -S /tmp/apfs-fuse -B /tmp/apfs-fuse/build -DCMAKE_BUILD_TYPE=Release
+            cmake --build /tmp/apfs-fuse/build -j"$(nproc)"
+            sudo cmake --install /tmp/apfs-fuse/build
+          fi
+          command -v apfs-fuse
+          apfs-fuse --help 2>&1 | head -3 || true
+          mkfs.hfsplus -V
           command -v img2simg || echo "img2simg missing (sparse step will be skipped)"
+          ls -l /dev/fuse
           df -h / | tail -1
 
       - name: Fetch IPSW
