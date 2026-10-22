@@ -1,0 +1,114 @@
+name: build-iosroot
+
+# Builds the HFS+ iPadOS root image that the nabu shim/kernel mounts as
+# ufsroot0.  This job only PRODUCES the image; flashing it is a separate,
+# destructive step (fastboot flash userdata wipes Android) that the owner
+# must trigger deliberately.
+#
+# Inputs are taken straight from the Apple IPSW, so nothing Apple-derived is
+# stored in this repo:
+#   096-57366-083.dmg  ~4.25 GB  OS root filesystem      (UDIF/APFS)
+#   096-56782-083.dmg  ~2.67 GB  SystemOS cryptex        (raw APFS)
+#   096-57613-084.dmg  ~10 MB    App cryptex             (raw APFS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      size:
+        description: HFS+ image size passed to mkiosroot.sh
+        default: "10G"
+      upload:
+        description: upload the finished image as an artifact (needs < 9G)
+        default: "true"
+
+concurrency:
+  group: iosroot-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IPSW_URL: https://updates.cdn-apple.com/2023SummerFCS/fullrestores/042-44385/366890C4-D9B5-4938-B399-C19FB58DBEE0/iPad_Pro_HFR_16.6.1_20G81_Restore.ipsw
+  OS_DMG: 096-57366-083.dmg
+  SYS_DMG: 096-56782-083.dmg
+  APP_DMG: 096-57613-084.dmg
+  IMG_SIZE: ${{ inputs.size || '10G' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apfs-fuse hfsprogs rsync unzip curl \
+                                      android-sdk-libsparse-utils
+          apfs-fuse 2>&1 | head -2 || true
+          mkfs.hfsplus -V || true
+          command -v img2simg || echo "img2simg missing (sparse step will be skipped)"
+          df -h / | tail -1
+
+      - name: Fetch IPSW
+        run: |
+          time curl -L --retry 3 --retry-delay 5 -o ipsw.zip "$IPSW_URL"
+          ls -l ipsw.zip
+          df -h / | tail -1
+
+      - name: Extract the three DMGs
+        run: |
+          mkdir -p ipsw
+          unzip -o ipsw.zip \
+            "Firmware/$OS_DMG" "Firmware/$SYS_DMG" "Firmware/$APP_DMG" -d ipsw
+          ls -l ipsw/Firmware/
+          rm -f ipsw.zip
+          df -h / | tail -1
+
+      - name: Build HFS+ root
+        run: |
+          # mkiosroot.sh mounts through apfs-fuse and rsyncs as root
+          sudo -E bash tools/mkiosroot.sh \
+            "ipsw/Firmware/$OS_DMG" "ipsw/Firmware/$SYS_DMG" "ipsw/Firmware/$APP_DMG" \
+            out.img "$IMG_SIZE"
+          ls -lh out.img
+
+      - name: Measure
+        run: |
+          set -x
+          ls -l out.img
+          du -h --apparent-size out.img
+          sudo mkdir -p /mnt/root && sudo mount -o loop,ro out.img /mnt/root || true
+          if mountpoint -q /mnt/root; then
+            sudo du -sh /mnt/root
+            sudo du -sh /mnt/root/* 2>/dev/null | sort -hr | head -20 || true
+            ls /mnt/root/System/Library/CoreServices/ 2>/dev/null || true
+            ls /mnt/root/sbin/launchd 2>/dev/null && echo "launchd present"
+            sudo umount /mnt/root
+          fi
+          df -h / | tail -1
+
+      - name: Sparse image
+        run: |
+          if command -v img2simg >/dev/null 2>&1; then
+            img2simg out.img out.simg && ls -lh out.simg
+          else
+            echo "img2simg unavailable; keeping the raw image"
+          fi
+          sha256sum out.img > SHA256SUMS
+          sha256sum out.simg >> SHA256SUMS 2>/dev/null || true
+          cat SHA256SUMS
+          { echo "raw   : $(stat -c %s out.img) bytes"; \
+            [ -f out.simg ] && echo "sparse: $(stat -c %s out.simg) bytes"; } > SIZES.txt
+          cat SIZES.txt
+
+      # The image is ~10G, above the per-artifact limit, so only the checksums
+      # and sizes are published here.  Flashing stays a deliberate manual step.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iosroot-meta
+          path: |
+            SHA256SUMS
+            SIZES.txt
+          retention-days: 7
+          if-no-files-found: warn
