@@ -39,6 +39,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The runner image ships ~60G of preinstalled SDKs; this job needs
+      # ~18G peak (5.6G IPSW + 7G DMGs + 10G HFS+ image) but only ~13G is
+      # free out of the box, which made curl die with exit 11 mid-download.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+                      /usr/local/lib/node_modules /opt/az \
+                      /usr/lib/google-cloud-sdk /usr/local/.ghcup \
+                      /opt/microsoft /usr/share/swift || true
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+          df -h /
+
       - name: Deps
         run: |
           sudo apt-get update -qq
