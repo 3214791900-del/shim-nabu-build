@@ -73,6 +73,21 @@ jobs:
           command -v mkfs.hfsplus
           command -v img2simg || echo "img2simg missing (sparse step will be skipped)"
           ls -l /dev/fuse
+          # mkiosroot.sh mounts the new image with -t hfsplus, so that module
+          # has to be loaded; Ubuntu does not load it by default and the
+          # runner image ships a trimmed module set.
+          sudo modprobe hfsplus 2>&1 || true
+          if ! grep -qw hfsplus /proc/filesystems; then
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" || \
+              echo "linux-modules-extra-$(uname -r) not installable"
+            sudo depmod -a 2>/dev/null || true
+            sudo modprobe hfsplus 2>&1 || true
+          fi
+          if grep -qw hfsplus /proc/filesystems; then
+            echo "hfsplus module ready"
+          else
+            echo "!! hfsplus still unavailable"
+          fi
           df -h / | tail -1
 
       - name: Fetch IPSW
