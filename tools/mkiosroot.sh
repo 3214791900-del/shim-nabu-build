@@ -93,6 +93,30 @@ for f in "$work/root/$dsc"/*; do
 	sudo ln "$f" "$work/root/System/Library/Caches/com.apple.dyld/${f##*/}"
 done
 
+# A hard link to a 0-byte file is a silent success: the image then boots with
+# launchd_unsecure_cache=1 (every dylib loaded off disk, an order of magnitude
+# slower) and no address can be symbolicated either.  apfs-fuse has returned
+# 0-byte stubs for these LZBITMAP-compressed files.
+#
+# The bring-up still boots without the cache, so this is a loud warning by
+# default; set STRICT_DSC=1 to make it fatal once the extraction is fixed.
+dscdir=$work/root/System/Library/Caches/com.apple.dyld
+dsc_files=$(find "$dscdir" -type f | wc -l)
+dsc_zero=$(find "$dscdir" -type f -size 0 | wc -l)
+dsc_bytes=$(du -sb "$dscdir" | cut -f1)
+if [ "$dsc_files" -eq 0 ] || [ "$dsc_zero" -ne 0 ] || [ "$dsc_bytes" -lt 100000000 ]; then
+	echo "WARNING: dyld shared cache not materialised" >&2
+	echo "  files=$dsc_files zero=$dsc_zero bytes=$dsc_bytes" >&2
+	echo "  source: $dsc  (expected ~3 GiB in 44 files)" >&2
+	echo "  apfs-fuse handed back 0-byte stubs; the boot then needs" >&2
+	echo "  launchd_unsecure_cache=1 and cannot symbolicate any address." >&2
+	if [ "${STRICT_DSC:-0}" = "1" ]; then
+		echo "ERROR: STRICT_DSC=1, refusing to ship a cache-less image" >&2
+		exit 1
+	fi
+fi
+echo "dyld shared cache: $dsc_files files, $dsc_bytes bytes"
+
 # dyld does not search the cryptexes at ignition level 1: hard-link every
 # cryptex file that has no counterpart in the OS root (libobjc-trampolines,
 # libffi-trampolines, libstdc++, ...) to its root path.
@@ -126,59 +150,6 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
 	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
-
-# --- NABU: the first boot must not sit in data migration or Setup --------
-# These are the files the upstream port writes by hand into image v13/v14.
-# Written here, while the volume is still mounted read-write.
-pref="$work/root/private/var/mobile/Library/Preferences"
-install -d -o 501 -g 501 -m 0755 "$pref"
-
-w=$(mktemp)
-cat > "$w" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>LastSystemVersion</key><string>20H392</string>
-</dict>
-</plist>
-PLIST
-install -o 501 -g 501 -m 0600 "$w" "$pref/com.apple.DataMigration.plist"
-
-cat > "$w" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>SetupDone</key><true/>
-    <key>SetupFinishedAllSteps</key><true/>
-    <key>SetupVersion</key><integer>11</integer>
-    <key>daemonizeNeedsToRun</key><false/>
-    <key>miniBuddyLaunched</key><false/>
-    <key>miniBuddyLaunchReason</key><integer>0</integer>
-    <key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>
-</dict>
-</plist>
-PLIST
-install -o 501 -g 501 -m 0600 "$w" "$pref/com.apple.purplebuddy.plist"
-
-cat > "$w" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>BKNoWatchdogs</key><true/>
-    <key>FBLaunchWatchdogExceptions</key>
-    <dict>
-        <key>com.apple.purplebuddy</key><integer>100</integer>
-    </dict>
-    <key>MCForceShowCloudConfigurationUI</key><false/>
-</dict>
-</plist>
-PLIST
-install -o 501 -g 501 -m 0600 "$w" "$pref/com.apple.springboard.plist"
-rm -f "$w"
-ls -l "$pref"
 
 df -h "$work/root"
 sudo umount "$work/root"
