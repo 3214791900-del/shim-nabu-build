@@ -129,21 +129,18 @@ jobs:
           fi
           df -h / | tail -1
 
-      - name: Compress and split
+      - name: Compress
         run: |
           set -x
           sudo apt-get install -y -qq zstd
           sha256sum out.img | tee SHA256SUMS
-          # 16G image, ~11G used: zeros compress away so this lands well under
-          # the raw size, and 1800M parts each stay under the per-artifact cap.
+          # 16G image with ~11G used: the zero fill compresses away, and
+          # iOS payload is largely pre-compressed, so expect roughly 4-6G.
           zstd -6 -T0 --long=27 out.img -o out.img.zst
           ls -lh out.img.zst
-          split -b 1800M out.img.zst out.img.zst.part-
-          ls -lh out.img.zst.part-*
-          sha256sum out.img.zst out.img.zst.part-* | tee -a SHA256SUMS
-          { echo "raw    : $(stat -c %s out.img) bytes"; \
-            echo "zstd   : $(stat -c %s out.img.zst) bytes"; \
-            echo "parts  : $(ls out.img.zst.part-* | wc -l)"; } > SIZES.txt
+          sha256sum out.img.zst | tee -a SHA256SUMS
+          { echo "raw  : $(stat -c %s out.img) bytes"; \
+            echo "zstd : $(stat -c %s out.img.zst) bytes"; } > SIZES.txt
           cat SIZES.txt
           rm -f out.img ipsw/*.dmg
 
@@ -152,8 +149,9 @@ jobs:
         with:
           name: iosroot-image
           path: |
-            out.img.zst.part-*
+            out.img.zst
             SHA256SUMS
             SIZES.txt
           retention-days: 5
+          compression-level: 0
           if-no-files-found: warn
