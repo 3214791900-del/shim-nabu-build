@@ -127,6 +127,59 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
 	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
 
+# --- NABU: the first boot must not sit in data migration or Setup --------
+# These are the files the upstream port writes by hand into image v13/v14.
+# Written here, while the volume is still mounted read-write.
+pref="$work/root/private/var/mobile/Library/Preferences"
+install -d -o 501 -g 501 -m 0755 "$pref"
+
+w=$(mktemp)
+cat > "$w" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>LastSystemVersion</key><string>20H392</string>
+</dict>
+</plist>
+PLIST
+install -o 501 -g 501 -m 0600 "$w" "$pref/com.apple.DataMigration.plist"
+
+cat > "$w" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>SetupDone</key><true/>
+    <key>SetupFinishedAllSteps</key><true/>
+    <key>SetupVersion</key><integer>11</integer>
+    <key>daemonizeNeedsToRun</key><false/>
+    <key>miniBuddyLaunched</key><false/>
+    <key>miniBuddyLaunchReason</key><integer>0</integer>
+    <key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>
+</dict>
+</plist>
+PLIST
+install -o 501 -g 501 -m 0600 "$w" "$pref/com.apple.purplebuddy.plist"
+
+cat > "$w" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>BKNoWatchdogs</key><true/>
+    <key>FBLaunchWatchdogExceptions</key>
+    <dict>
+        <key>com.apple.purplebuddy</key><integer>100</integer>
+    </dict>
+    <key>MCForceShowCloudConfigurationUI</key><false/>
+</dict>
+</plist>
+PLIST
+install -o 501 -g 501 -m 0600 "$w" "$pref/com.apple.springboard.plist"
+rm -f "$w"
+ls -l "$pref"
+
 df -h "$work/root"
 sudo umount "$work/root"
 # Linux hfsplus decomposes some non-ASCII names (localized Shortcuts examples)
