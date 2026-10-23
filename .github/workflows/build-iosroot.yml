@@ -121,8 +121,7 @@ jobs:
           # kernel, and route the display daemons' stdout/stderr to
           # /dev/console so their failures show up on the panel. launchd only
           # reads this plist with launchd_unsecure_cache=1 in the boot args.
-          sudo mkdir -p /mnt/root
-          sudo mount -o loop,rw out.img /mnt/root
+          sudo bash tools/mount-rw.sh out.img /mnt/root
           sudo cp /mnt/root/System/Library/xpc/launchd.plist /tmp/launchd.plist
           sudo python3 tools/patch-launchd-plist.py /tmp/launchd.plist /tmp/launchd.new.plist \
             com.apple.backboardd com.apple.SpringBoard com.apple.runningboardd \
@@ -139,8 +138,7 @@ jobs:
       # hand (image v13/v14); writing them here keeps the image reproducible.
       - name: NABU userland tweaks
         run: |
-          sudo mkdir -p /mnt/root
-          sudo mount -o loop,rw out.img /mnt/root
+          sudo bash tools/mount-rw.sh out.img /mnt/root
           pref=/mnt/root/private/var/mobile/Library/Preferences
           sudo install -d -o 501 -g 501 -m 0755 "$pref"
 
