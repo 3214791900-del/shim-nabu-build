@@ -119,36 +119,41 @@ jobs:
           du -h --apparent-size out.img
           sudo mkdir -p /mnt/root && sudo mount -o loop,ro out.img /mnt/root || true
           if mountpoint -q /mnt/root; then
-            sudo du -sh /mnt/root
+            # du exits 1 on dangling shortcuts (Thai .shortcut stubs); that is
+            # harmless, so never let it abort the job.
+            sudo du -sh /mnt/root || true
             sudo du -sh /mnt/root/* 2>/dev/null | sort -hr | head -20 || true
             ls /mnt/root/System/Library/CoreServices/ 2>/dev/null || true
-            ls /mnt/root/sbin/launchd 2>/dev/null && echo "launchd present"
-            sudo umount /mnt/root
+            if [ -e /mnt/root/sbin/launchd ]; then echo "launchd present"; else echo "!! launchd MISSING"; fi
+            sudo umount /mnt/root || true
           fi
           df -h / | tail -1
 
-      - name: Sparse image
+      - name: Compress and split
         run: |
-          if command -v img2simg >/dev/null 2>&1; then
-            img2simg out.img out.simg && ls -lh out.simg
-          else
-            echo "img2simg unavailable; keeping the raw image"
-          fi
-          sha256sum out.img > SHA256SUMS
-          sha256sum out.simg >> SHA256SUMS 2>/dev/null || true
-          cat SHA256SUMS
-          { echo "raw   : $(stat -c %s out.img) bytes"; \
-            [ -f out.simg ] && echo "sparse: $(stat -c %s out.simg) bytes"; } > SIZES.txt
+          set -x
+          sudo apt-get install -y -qq zstd
+          sha256sum out.img | tee SHA256SUMS
+          # 16G image, ~11G used: zeros compress away so this lands well under
+          # the raw size, and 1800M parts each stay under the per-artifact cap.
+          zstd -6 -T0 --long=27 out.img -o out.img.zst
+          ls -lh out.img.zst
+          split -b 1800M out.img.zst out.img.zst.part-
+          ls -lh out.img.zst.part-*
+          sha256sum out.img.zst out.img.zst.part-* | tee -a SHA256SUMS
+          { echo "raw    : $(stat -c %s out.img) bytes"; \
+            echo "zstd   : $(stat -c %s out.img.zst) bytes"; \
+            echo "parts  : $(ls out.img.zst.part-* | wc -l)"; } > SIZES.txt
           cat SIZES.txt
+          rm -f out.img ipsw/*.dmg
 
-      # The image is ~10G, above the per-artifact limit, so only the checksums
-      # and sizes are published here.  Flashing stays a deliberate manual step.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: iosroot-meta
+          name: iosroot-image
           path: |
+            out.img.zst.part-*
             SHA256SUMS
             SIZES.txt
-          retention-days: 7
+          retention-days: 5
           if-no-files-found: warn
