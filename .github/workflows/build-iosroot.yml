@@ -32,6 +32,9 @@ env:
   APP_DMG: 096-57613-084.dmg
   IMG_SIZE: ${{ inputs.size || '10G' }}
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -162,6 +165,27 @@ jobs:
             echo "zstd : $(stat -c %s out.img.zst) bytes"; } > SIZES.txt
           cat SIZES.txt
           rm -f out.img ipsw/*.dmg
+
+      # Release assets are served from objects.githubusercontent.com, which is
+      # a different (usually much faster) CDN than the Actions artifact blob
+      # store. GitHub caps a single asset at 2 GiB, so split into <1900 MiB
+      # parts. Download the parts and `cat` them back together.
+      - name: Publish as release assets
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f out.img.zst ]; then echo "no image, skipping"; exit 0; fi
+          split -b 1900M out.img.zst part-
+          ls -lh part-*
+          tag="iosroot-$(date -u +%Y%m%d-%H%M%S)"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          gh release create "$tag" part-* SHA256SUMS SIZES.txt \
+            --repo "${{ github.repository }}" \
+            --title "$tag" \
+            --notes "iPadOS 16.6.1 HFS+ root for nabu. Concatenate the parts in order, then: zstd -d." 
+          { echo "concat: cat part-* > out.img.zst"; \
+            echo "unpack: zstd -d out.img.zst -o out.img"; } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
