@@ -112,6 +112,25 @@ jobs:
             out.img "$IMG_SIZE"
           ls -lh out.img
 
+      - name: Patch launchd for console logging
+        run: |
+          # Rename _PanicOnCrash so a crashing daemon cannot panic the bring-up
+          # kernel, and route the display daemons' stdout/stderr to
+          # /dev/console so their failures show up on the panel. launchd only
+          # reads this plist with launchd_unsecure_cache=1 in the boot args.
+          sudo mkdir -p /mnt/root
+          sudo mount -o loop,rw out.img /mnt/root
+          sudo cp /mnt/root/System/Library/xpc/launchd.plist /tmp/launchd.plist
+          sudo python3 tools/patch-launchd-plist.py /tmp/launchd.plist /tmp/launchd.new.plist \
+            com.apple.backboardd com.apple.SpringBoard com.apple.runningboardd \
+            com.apple.frontboardd com.apple.WindowServer || \
+            echo "!! launchd patch skipped (labels missing)"
+          if [ -s /tmp/launchd.new.plist ]; then
+            sudo cp /tmp/launchd.new.plist /mnt/root/System/Library/xpc/launchd.plist
+            ls -l /mnt/root/System/Library/xpc/launchd.plist
+          fi
+          sudo umount /mnt/root
+
       - name: Measure
         run: |
           set -x
