@@ -152,9 +152,9 @@ jobs:
           chk('containers/Bundle', os.path.isdir(root + '/private/var/containers/Bundle'))
           lp = plistlib.load(open(root + '/System/Library/xpc/launchd.plist', 'rb'))['LaunchDaemons']
           chk('no _PanicOnCrash left', not any('_PanicOnCrash' in j for j in lp.values()))
-          chk('backboardd -> /dev/console',
-              any(j.get('Label') == 'com.apple.backboardd' and
-                  j.get('StandardErrorPath') == '/dev/console' for j in lp.values()))
+          chk('backboardd has NO /dev/console redirect',
+              not any(j.get('Label') == 'com.apple.backboardd' and
+                      'StandardErrorPath' in j for j in lp.values()))
           dsc = root + '/System/Library/Caches/com.apple.dyld'
           names = os.listdir(dsc) if os.path.isdir(dsc) else []
           filled = [f for f in names if os.path.getsize(os.path.join(dsc, f)) > 0]
