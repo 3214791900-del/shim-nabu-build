@@ -127,7 +127,7 @@ jobs:
           # boot stops at the progress bar with no error on the panel.
           sudo mkdir -p /mnt/root
           sudo mount -o loop,ro out.img /mnt/root
-          python3 - <<'PY'
+          sudo python3 - <<'PY'
           import os, plistlib, sys
           root = '/mnt/root'
           pref = root + '/private/var/mobile/Library/Preferences/'
