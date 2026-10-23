@@ -157,12 +157,14 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 # is OK), so everything the bring-up needs has to be written here.  Two builds
 # were lost to a CI step that mounted it again and silently got a read-only
 # filesystem.
+#
+# NOTE: do NOT set StandardOutPath/StandardErrorPath=/dev/console on the
+# display daemons.  The reference port hit this: launchd then cannot spawn
+# them at all ("posix_spawn(/usr/libexec/backboardd), error 0xd - Permission
+# denied", xpcproxy exit 78) and backboardd never starts.  Their image v9 had
+# to rename those keys back to ...PatX.  Daemon output is read with the
+# kernel's /dev/null tee (boot-arg nabunull) instead.
 tools=$(dirname "$(realpath "$0")")
-sudo python3 "$tools/patch-launchd-plist.py" \
-	"$work/root/System/Library/xpc/launchd.plist" "$work/launchd.new.plist" \
-	com.apple.backboardd com.apple.SpringBoard com.apple.runningboardd
-sudo install -m 0644 -o 0 -g 0 "$work/launchd.new.plist" \
-	"$work/root/System/Library/xpc/launchd.plist"
 sudo python3 "$tools/nabu-root-tweaks.py" "$work/root"
 
 df -h "$work/root"
