@@ -48,7 +48,7 @@ jobs:
           # high bank, which both differ from this tablet.  The nabu profile
           # matches the live FDT: 8GB bank at 0x1_80000000, cont_splash
           # 1600x2560 stride 6400, plus the iPad7,3 identity.
-          python3 tools/mkadt.py shim/out/nabu.adt --nabu --ipad --dump
+          python3 tools/mkadt.py shim/out/nabu.adt --nabu --dump
           ls -l shim/out/nabu.adt
 
       - name: Payload
