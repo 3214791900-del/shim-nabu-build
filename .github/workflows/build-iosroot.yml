@@ -16,7 +16,7 @@ on:
     inputs:
       size:
         description: HFS+ image size passed to mkiosroot.sh
-        default: "10G"
+        default: "16G"
       upload:
         description: upload the finished image as an artifact (needs < 9G)
         default: "true"
@@ -30,7 +30,7 @@ env:
   OS_DMG: 096-57366-083.dmg
   SYS_DMG: 096-56782-083.dmg
   APP_DMG: 096-57613-084.dmg
-  IMG_SIZE: ${{ inputs.size || '10G' }}
+  IMG_SIZE: ${{ inputs.size || '16G' }}
 
 permissions:
   contents: write
@@ -132,6 +132,116 @@ jobs:
             sudo cp /tmp/launchd.new.plist /mnt/root/System/Library/xpc/launchd.plist
             ls -l /mnt/root/System/Library/xpc/launchd.plist
           fi
+          sudo umount /mnt/root
+
+      # NABU userland tweaks: the first boot must not sit in the data-migration
+      # / Setup assistant path.  These are the files the upstream port writes by
+      # hand (image v13/v14); writing them here keeps the image reproducible.
+      - name: NABU userland tweaks
+        run: |
+          sudo mkdir -p /mnt/root
+          sudo mount -o loop,rw out.img /mnt/root
+          pref=/mnt/root/private/var/mobile/Library/Preferences
+          sudo install -d -o 501 -g 501 -m 0755 "$pref"
+
+          # 1. Data migration already done for this build (vs ProductBuildVersion 20G81):
+          #    without this datamigrator runs again on every boot, backboardd holds
+          #    the SpringBoard system-shell check-in until it finishes, and the UI
+          #    never appears.  The file name matters: com.apple.DataMigration.plist
+          #    and the ByHost variant are both ignored (upstream tried them first).
+          cat > /tmp/dm.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>LastSystemVersion</key><string>20G81</string>
+          </dict>
+          </plist>
+          PLIST
+          sudo install -o 501 -g 501 -m 0600 /tmp/dm.plist "$pref/com.apple.migration.plist"
+
+          # 2. Setup assistant already completed.
+          cat > /tmp/pb.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>SetupDone</key><true/>
+              <key>SetupFinishedAllSteps</key><true/>
+              <key>SetupVersion</key><integer>11</integer>
+              <key>daemonizeNeedsToRun</key><false/>
+              <key>miniBuddyLaunched</key><false/>
+              <key>miniBuddyLaunchReason</key><integer>0</integer>
+              <key>LockdownActivationIndicatesCloudConfigurationAvailable</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          sudo install -o 501 -g 501 -m 0600 /tmp/pb.plist "$pref/com.apple.purplebuddy.plist"
+
+          # 3. SpringBoard: no boot watchdogs, and give purplebuddy a long leash.
+          cat > /tmp/sb.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>BKNoWatchdogs</key><true/>
+              <key>FBLaunchWatchdogExceptions</key>
+              <dict>
+                  <key>com.apple.purplebuddy</key><integer>100</integer>
+              </dict>
+              <key>MCForceShowCloudConfigurationUI</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          sudo install -o 501 -g 501 -m 0600 /tmp/sb.plist "$pref/com.apple.springboard.plist"
+
+          ls -l "$pref" | head -20
+          sudo umount /mnt/root
+
+      - name: Verify userland tweaks landed
+        run: |
+          # Everything below gates SpringBoard: if one of these is missing the
+          # boot stops at the progress bar with no error on the panel.
+          sudo mkdir -p /mnt/root
+          sudo mount -o loop,ro out.img /mnt/root
+          python3 - <<'PY'
+          import os, plistlib, sys
+          root = '/mnt/root'
+          pref = root + '/private/var/mobile/Library/Preferences/'
+          sv = plistlib.load(open(root + '/System/Library/CoreServices/SystemVersion.plist', 'rb'))
+          build = sv['ProductBuildVersion']
+          bad = []
+          def chk(name, ok):
+              print(('OK   ' if ok else 'FAIL ') + name)
+              if not ok:
+                  bad.append(name)
+          def pref_d(name):
+              return plistlib.load(open(pref + name, 'rb'))
+          try:
+              chk('migration LastSystemVersion == ' + build,
+                  pref_d('com.apple.migration.plist').get('LastSystemVersion') == build)
+          except Exception as e:
+              chk('migration plist (%s)' % e, False)
+          try:
+              chk('purplebuddy SetupDone', pref_d('com.apple.purplebuddy.plist').get('SetupDone') is True)
+          except Exception as e:
+              chk('purplebuddy plist (%s)' % e, False)
+          chk('containers/Bundle', os.path.isdir(root + '/private/var/containers/Bundle'))
+          lp = plistlib.load(open(root + '/System/Library/xpc/launchd.plist', 'rb'))['LaunchDaemons']
+          chk('no _PanicOnCrash left', not any('_PanicOnCrash' in j for j in lp.values()))
+          chk('backboardd -> /dev/console',
+              any(j.get('Label') == 'com.apple.backboardd' and
+                  j.get('StandardErrorPath') == '/dev/console' for j in lp.values()))
+          dsc = root + '/System/Library/Caches/com.apple.dyld'
+          names = os.listdir(dsc) if os.path.isdir(dsc) else []
+          filled = [f for f in names if os.path.getsize(os.path.join(dsc, f)) > 0]
+          if not filled:
+              print('WARN dyld shared cache is 0 bytes (%d entries); the image then '
+                    'needs launchd_unsecure_cache=1 and cannot symbolicate' % len(names))
+          else:
+              print('OK   dyld shared cache (%d files)' % len(filled))
+          sys.exit(1 if bad else 0)
+          PY
           sudo umount /mnt/root
 
       - name: Measure
