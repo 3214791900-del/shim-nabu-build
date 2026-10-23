@@ -151,6 +151,20 @@ printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
 	'<plist version="1.0"><dict><key>KeyBagKeys</key><data>U1dFRVQ=</data></dict></plist>' |
 	sudo install -m 0600 -o 0 -g 0 /dev/stdin "$work/root/private/var/keybags/systembag.kb"
 
+# --- NABU userland state, while the volume is still mounted read-write ------
+# Linux's hfsplus will not re-mount this journaled image read-write after it
+# has been unmounted ("Read-only file system", even when fsck says the volume
+# is OK), so everything the bring-up needs has to be written here.  Two builds
+# were lost to a CI step that mounted it again and silently got a read-only
+# filesystem.
+tools=$(dirname "$(realpath "$0")")
+sudo python3 "$tools/patch-launchd-plist.py" \
+	"$work/root/System/Library/xpc/launchd.plist" "$work/launchd.new.plist" \
+	com.apple.backboardd com.apple.SpringBoard com.apple.runningboardd
+sudo install -m 0644 -o 0 -g 0 "$work/launchd.new.plist" \
+	"$work/root/System/Library/xpc/launchd.plist"
+sudo python3 "$tools/nabu-root-tweaks.py" "$work/root"
+
 df -h "$work/root"
 sudo umount "$work/root"
 # Linux hfsplus decomposes some non-ASCII names (localized Shortcuts examples)
