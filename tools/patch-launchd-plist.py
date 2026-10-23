@@ -35,7 +35,11 @@ def main():
             found.add(label)
     missing = labels - found
     if missing:
-        sys.exit(f'jobs not found: {", ".join(sorted(missing))}')
+        # Not an error: the job set differs between iPad and iPhone images
+        # (there is no com.apple.WindowServer daemon in 16.6.1, for example).
+        print(f'warning: labels not present in this image: {", ".join(sorted(missing))}')
+    if not found:
+        sys.exit('no requested label exists in this image; nothing patched')
     with open(dst, 'wb') as f:
         plistlib.dump(plist, f, fmt=plistlib.FMT_BINARY)
     print(f'{dst}: console logging for {", ".join(sorted(found))}')
