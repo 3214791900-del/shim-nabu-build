@@ -114,8 +114,16 @@ def build(seed=None, qemu=False, highmem=False, nabu=False, ipad=False):
             product_props = d22ap_product()
             home_button_type = 2
     else:
-        phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
-        fb, fb_size, fb_w, fb_h, fb_stride = FB, FB_SIZE, FB_W, FB_H, FB_STRIDE
+        if highmem:
+            # Upstream's working memory layout (4G bank at 4G) ...
+            phys_base, mem_size = HIGH_PHYS_BASE, HIGH_MEM_SIZE
+            # ... but keep the real nabu panel, otherwise every line is
+            # skewed (1080x2400/4320 on a 1600x2560/6400 panel).
+            fb, fb_size, fb_w, fb_h, fb_stride = (NABU_FB, NABU_FB_SIZE,
+                NABU_FB_W, NABU_FB_H, NABU_FB_STRIDE)
+        else:
+            phys_base, mem_size = PHYS_BASE, MEM_SIZE
+            fb, fb_size, fb_w, fb_h, fb_stride = FB, FB_SIZE, FB_W, FB_H, FB_STRIDE
         ufs, ufs_size = UFS, UFS_SIZE
         ecid = NABU_ECID
         display_scale = 3
