@@ -159,7 +159,14 @@ def display_env(root):
     Overridable through NABU_CA_ENV (comma separated K=V) for experiments.
     """
     import os as _os
-    env = {'CA_FORCE_LOCAL_SERVER': '1', 'CA_FORCE_TIMER': '1'}
+    # Kill the GL path so CoreAnimation has to fall back to its software
+    # rasteriser (CA::OGL::SWContext), and keep the render loop local.
+    env = {
+        'CA_ENABLE_OGL': '0',
+        'CA_FORCE_LOCAL_SERVER': '1',
+        'CA_FORCE_TIMER': '1',
+        'CA_ALWAYS_RENDER': '1',
+    }
     extra = _os.environ.get('NABU_CA_ENV', '')
     for item in extra.split(','):
         if '=' in item:
