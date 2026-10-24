@@ -209,7 +209,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ ! -f out.img.zst ]; then echo "no image, skipping"; exit 0; fi
-          split -b 1900M out.img.zst part-
+          # Four equal parts: on some links a single multi-GB transfer stalls
+          # (TLS handshake timeouts, resets), while ~1.1 GB pieces go through.
+          split -n 4 out.img.zst part-
           ls -lh part-*
           tag="iosroot-$(date -u +%Y%m%d-%H%M%S)"
           echo "TAG=$tag" >> "$GITHUB_ENV"
