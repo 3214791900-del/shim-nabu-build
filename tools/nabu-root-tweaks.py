@@ -54,16 +54,29 @@ def load(path):
         return plistlib.load(f)
 
 
+def chown_chmod(path, uid, gid, mode):
+    """Ownership is required on the device; tolerate a non-root dry run."""
+    try:
+        os.chown(path, uid, gid)
+    except (AttributeError, NotImplementedError):
+        pass
+    except PermissionError:
+        if os.name == 'posix' and os.geteuid() == 0:
+            raise
+    os.chmod(path, mode)
+
+
 def save(path, data, uid, gid, mode, fmt=plistlib.FMT_BINARY):
     with open(path, 'wb') as f:
         plistlib.dump(data, f, fmt=fmt)
-    os.chown(path, uid, gid)
-    os.chmod(path, mode)
+    chown_chmod(path, uid, gid, mode)
 
 
 def merge_pref(root, name, values):
     """Merge keys into /var/mobile/Library/Preferences/NAME.plist (mobile, 0600)."""
-    path = os.path.join(root, 'private/var/mobile/Library/Preferences', name + '.plist')
+    d = os.path.join(root, 'private/var/mobile/Library/Preferences')
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, name + '.plist')
     data = load(path) if os.path.exists(path) else {}
     data.update(values)
     save(path, data, MOBILE, MOBILE, 0o600)
@@ -93,8 +106,7 @@ def containers(root):
         d = os.path.join(base, sub)
         if not os.path.isdir(d):
             os.makedirs(d)
-            os.chown(d, uid, uid)
-            os.chmod(d, 0o755)
+            chown_chmod(d, uid, uid, 0o755)
             print('mkdir', d)
 
 
@@ -113,8 +125,7 @@ def activation(root, build=BUILD, version=VERSION):
         return
     d = os.path.join(c, 'Library/internal')
     os.makedirs(d, exist_ok=True)
-    os.chown(d, MOBILE, MOBILE)
-    os.chmod(d, 0o755)
+    chown_chmod(d, MOBILE, MOBILE, 0o755)
     save(os.path.join(d, 'data_ark.plist'), {
         '-ActivationState': 'Activated', '-BrickState': False,
         '-BuildVersion': build, '-ProductVersion': version,
@@ -138,6 +149,35 @@ def audio(root):
         print('StartRecorderServer off', os.path.relpath(conf, root))
 
 
+def display_env(root):
+    """Give CoreAnimation a CPU-only renderer path.
+
+    The porter has no GPU driver, so CA never builds a renderer and backboardd
+    submits black frames.  QuartzCore reads a pile of CA_* environment
+    variables; forcing the local server and the timer keeps the render loop
+    inside backboardd instead of waiting for a render-server/GPU handshake.
+    Overridable through NABU_CA_ENV (comma separated K=V) for experiments.
+    """
+    import os as _os
+    env = {'CA_FORCE_LOCAL_SERVER': '1', 'CA_FORCE_TIMER': '1'}
+    extra = _os.environ.get('NABU_CA_ENV', '')
+    for item in extra.split(','):
+        if '=' in item:
+            k, v = item.split('=', 1)
+            env[k.strip()] = v.strip()
+    path = os.path.join(root, 'System/Library/xpc/launchd.plist')
+    st = os.stat(path)
+    plist = load(path)
+    jobs = plist['LaunchDaemons']
+    hit = 0
+    for job in jobs.values():
+        if job.get('Label') in ('com.apple.backboardd', 'com.apple.SpringBoard'):
+            job.setdefault('EnvironmentVariables', {}).update(env)
+            hit += 1
+    save(path, plist, st.st_uid, st.st_gid, st.st_mode & 0o7777)
+    print('display env on %d jobs: %s' % (hit, ', '.join(sorted(env))))
+
+
 def main():
     if len(sys.argv) != 2 or not os.path.isdir(os.path.join(sys.argv[1], 'System/Library/xpc')):
         sys.exit(__doc__)
@@ -147,6 +187,7 @@ def main():
     launchd(root)
     containers(root)
     activation(root, build, version)
+    display_env(root)
     audio(root)
     merge_pref(root, 'com.apple.migration', {
         'LastSystemVersion': build,
@@ -165,6 +206,44 @@ def main():
                            'SilentICDPUpgrade')})
     merge_pref(root, 'com.apple.managedconfiguration.notbackedup', {
         'LockdownActivationIndicatesCloudConfigurationAvailable': False})
+    verify(root, build)
+
+
+def verify(root, build):
+    """Fail the build when the files that gate SpringBoard did not land.
+
+    The two ways this has been got wrong before: the build version written was
+    not the one in the image (DataMigration then re-runs on every boot and
+    backboardd never releases the system-shell check-in), and the migration
+    state went into com.apple.DataMigration.plist / the ByHost variant, which
+    the daemon does not read.
+    """
+    pref = os.path.join(root, 'private/var/mobile/Library/Preferences')
+    checks = {
+        'com.apple.migration.plist': lambda d: d.get('LastSystemVersion') == build,
+        'com.apple.purplebuddy.plist': lambda d: d.get('SetupDone') is True,
+        'com.apple.springboard.plist': lambda d: d.get('BKNoWatchdogs') is True,
+    }
+    bad = []
+    for name, ok in checks.items():
+        try:
+            good = ok(load(os.path.join(pref, name)))
+        except Exception as exc:
+            good = False
+            print(f'  {name}: {exc}')
+        print(f'verify {name}: {"OK" if good else "FAIL"}')
+        if not good:
+            bad.append(name)
+    for d in ('Bundle', 'Data/System'):
+        p = os.path.join(root, 'private/var/containers', d)
+        if os.path.isdir(p):
+            print(f'verify containers/{d}: OK')
+        else:
+            print(f'verify containers/{d}: FAIL')
+            bad.append(f'containers/{d}')
+    if bad:
+        sys.exit('nabu-root-tweaks: verification failed: ' + ', '.join(bad))
+    print(f'nabu-root-tweaks: OK for {build}')
 
 
 if __name__ == '__main__':
