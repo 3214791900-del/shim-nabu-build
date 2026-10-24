@@ -1,0 +1,62 @@
+# Re-split an existing iosroot artifact into smaller parts.
+#
+# The 1.2 GB pieces of iosroot-20261024-120930 would not come down on some
+# links (TLS resets mid-transfer).  Nothing needs rebuilding: fetch the
+# artifact inside the runner (fast) and publish ~500 MB pieces instead.
+name: resplit
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: build-iosroot run id that owns the iosroot-image artifact
+        default: "40092166163"
+      part_mb:
+        description: size of each part in MB
+        default: "500"
+
+permissions:
+  contents: write
+
+jobs:
+  resplit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Fetch the artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: iosroot-image
+          path: img
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Split it
+        run: |
+          cd img
+          ls -l
+          f=$(ls *.zst | head -1)
+          echo "splitting $f"
+          split -b ${{ inputs.part_mb }}M "$f" part-
+          ls -l part-*
+          sha256sum "$f" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="resplit-$(date -u +%Y%m%d-%H%M%S)"
+          gh release create "$tag" img/part-* img/SHA256SUMS \
+            --repo "${{ github.repository }}" --title "$tag" \
+            --notes "re-split of iosroot-20261024-120930 (${{ inputs.part_mb }} MB parts)"
+          echo "https://github.com/${{ github.repository }}/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parts
+          path: |
+            img/part-*
+            img/SHA256SUMS
+          if-no-files-found: warn
