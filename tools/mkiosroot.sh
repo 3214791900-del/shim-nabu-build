@@ -86,12 +86,14 @@ copy "$work/os/root" "$work/root"
 copy "$work/sysos/root" "$work/root/private/preboot/Cryptexes/OS"
 copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
 
-# Shared cache where dyld looks at ignition level 1: hard links, no extra space.
+# Shared cache where dyld looks at ignition level 1.  This must be a real copy:
+# the source lives on the apfs-fuse mount, and a hard link across filesystems
+# fails with EXDEV, which left every cache file at 0 bytes.  That in turn made
+# the image useless for anything that reads the cache - including patching
+# QuartzCore to change CoreAnimation's "no GPU" behaviour.
 dsc=private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
 sudo mkdir -p "$work/root/System/Library/Caches/com.apple.dyld"
-for f in "$work/root/$dsc"/*; do
-	sudo ln "$f" "$work/root/System/Library/Caches/com.apple.dyld/${f##*/}"
-done
+sudo cp -a "$work/root/$dsc"/. "$work/root/System/Library/Caches/com.apple.dyld/"
 
 # A hard link to a 0-byte file is a silent success: the image then boots with
 # launchd_unsecure_cache=1 (every dylib loaded off disk, an order of magnitude
