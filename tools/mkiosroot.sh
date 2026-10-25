@@ -93,7 +93,10 @@ copy "$work/appos/root" "$work/root/private/preboot/Cryptexes/App"
 # QuartzCore to change CoreAnimation's "no GPU" behaviour.
 dsc=private/preboot/Cryptexes/OS/System/Library/Caches/com.apple.dyld
 sudo mkdir -p "$work/root/System/Library/Caches/com.apple.dyld"
-sudo cp -a "$work/root/$dsc"/. "$work/root/System/Library/Caches/com.apple.dyld/"
+# cp -a fails here: apfs-fuse cannot return the source's permissions/xattrs
+# ("preserving permissions ... No data available") and cp exits non-zero.
+# Copy the data only and let the size check below decide whether it worked.
+sudo cp -r "$work/root/$dsc"/. "$work/root/System/Library/Caches/com.apple.dyld/" || true
 
 # A hard link to a 0-byte file is a silent success: the image then boots with
 # launchd_unsecure_cache=1 (every dylib loaded off disk, an order of magnitude
